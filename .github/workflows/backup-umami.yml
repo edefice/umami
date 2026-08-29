@@ -29,14 +29,9 @@ jobs:
           # connection parameter and errors with "invalid URI query
           # parameter". Strip it here rather than keep a second secret in
           # sync; `--schema=umami` below is pg_dump's own, correct way to
-          # scope the dump.
-          DUMP_URL="$(python3 -c '
-import os
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-u = urlsplit(os.environ["DIRECT_DATABASE_URL"])
-q = [(k, v) for k, v in parse_qsl(u.query) if k != "schema"]
-print(urlunsplit((u.scheme, u.netloc, u.path, urlencode(q), u.fragment)))
-')"
+          # scope the dump. Handles schema= being the only param, the
+          # first of several, or a later one.
+          DUMP_URL="$(echo "$DIRECT_DATABASE_URL" | sed -E 's/([?&])schema=[^&]*&?/\1/; s/[?&]$//')"
 
           pg_dump "$DUMP_URL" --schema=umami --no-owner --no-privileges \
             | gzip -9 > "umami-${STAMP}.sql.gz"
