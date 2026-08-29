@@ -19,13 +19,6 @@ jobs:
           DIRECT_DATABASE_URL: ${{ secrets.DIRECT_DATABASE_URL }}
         run: |
           set -euo pipefail
-          # Plain `postgresql-client` on ubuntu-latest resolves to v16 —
-          # pg_dump refuses to dump from a *newer* major server version
-          # than itself (Supabase runs Postgres 17). Install the matching
-          # major version explicitly. If Supabase ever moves to 18, bump
-          # this too (pg_dump's error message names both versions, so a
-          # future mismatch fails loudly here rather than silently).
-          sudo apt-get update -qq && sudo apt-get install -yqq postgresql-client-17
           STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           echo "DUMP_NAME=umami-${STAMP}.sql.gz" >> "$GITHUB_ENV"
 
@@ -39,7 +32,18 @@ jobs:
           # first of several, or a later one.
           DUMP_URL="$(echo "$DIRECT_DATABASE_URL" | sed -E 's/([?&])schema=[^&]*&?/\1/; s/[?&]$//')"
 
-          pg_dump "$DUMP_URL" --schema=umami --no-owner --no-privileges \
+          # Run pg_dump from the official postgres:17 image rather than an
+          # apt-installed client: ubuntu-latest's default
+          # `postgresql-client` package is v16, and pg_dump refuses to
+          # dump from a *newer* major server version than itself (Supabase
+          # runs Postgres 17) — confirmed by trial, not assumed. Getting a
+          # matching v17 apt package means adding PGDG's third-party repo,
+          # which isn't preconfigured on this runner despite the
+          # misleading "pgdg24.04" string in the v16 package's own
+          # version (also confirmed by trial: `postgresql-client-17` is
+          # simply not found without it). The Docker image sidesteps all
+          # of that — its pg_dump always matches its tag, no repo setup.
+          docker run --rm postgres:17 pg_dump "$DUMP_URL" --schema=umami --no-owner --no-privileges \
             | gzip -9 > "umami-${STAMP}.sql.gz"
 
       - name: Upload to R2 and rotate to last 4
