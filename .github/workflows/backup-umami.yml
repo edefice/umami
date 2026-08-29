@@ -22,7 +22,23 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -yqq postgresql-client
           STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           echo "DUMP_NAME=umami-${STAMP}.sql.gz" >> "$GITHUB_ENV"
-          pg_dump "$DIRECT_DATABASE_URL" --schema=umami --no-owner --no-privileges \
+
+          # DIRECT_DATABASE_URL carries a `?schema=umami` query param for
+          # Prisma's benefit (infra/umami/RUNBOOK.md) — libpq's own URI
+          # parser (what pg_dump uses) doesn't recognize `schema` as a
+          # connection parameter and errors with "invalid URI query
+          # parameter". Strip it here rather than keep a second secret in
+          # sync; `--schema=umami` below is pg_dump's own, correct way to
+          # scope the dump.
+          DUMP_URL="$(python3 -c '
+import os
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+u = urlsplit(os.environ["DIRECT_DATABASE_URL"])
+q = [(k, v) for k, v in parse_qsl(u.query) if k != "schema"]
+print(urlunsplit((u.scheme, u.netloc, u.path, urlencode(q), u.fragment)))
+')"
+
+          pg_dump "$DUMP_URL" --schema=umami --no-owner --no-privileges \
             | gzip -9 > "umami-${STAMP}.sql.gz"
 
       - name: Upload to R2 and rotate to last 4
