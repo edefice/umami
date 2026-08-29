@@ -19,7 +19,13 @@ jobs:
           DIRECT_DATABASE_URL: ${{ secrets.DIRECT_DATABASE_URL }}
         run: |
           set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -yqq postgresql-client
+          # Plain `postgresql-client` on ubuntu-latest resolves to v16 —
+          # pg_dump refuses to dump from a *newer* major server version
+          # than itself (Supabase runs Postgres 17). Install the matching
+          # major version explicitly. If Supabase ever moves to 18, bump
+          # this too (pg_dump's error message names both versions, so a
+          # future mismatch fails loudly here rather than silently).
+          sudo apt-get update -qq && sudo apt-get install -yqq postgresql-client-17
           STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           echo "DUMP_NAME=umami-${STAMP}.sql.gz" >> "$GITHUB_ENV"
 
