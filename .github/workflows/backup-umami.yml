@@ -1,0 +1,47 @@
+name: Backup Umami database
+
+# Weekly dump of ONLY the `umami` schema (never touches the Splitshape
+# app's own `public` schema), uploaded to Cloudflare R2 with a 4-copy
+# rotation. This is the one piece of "infrastructure" in the whole Umami
+# setup beyond Vercel/Supabase — see infra/umami/RUNBOOK.md, "Backup i
+# odtwarzanie", in the splitsmith repo for restore steps and secret setup.
+on:
+  schedule:
+    - cron: "17 3 * * 0" # Sunday 03:17 UTC — arbitrary off-peak time
+  workflow_dispatch: {} # lets you trigger a manual test run from the Actions tab
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump umami schema
+        env:
+          DIRECT_DATABASE_URL: ${{ secrets.DIRECT_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -yqq postgresql-client
+          STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "DUMP_NAME=umami-${STAMP}.sql.gz" >> "$GITHUB_ENV"
+          pg_dump "$DIRECT_DATABASE_URL" --schema=umami --no-owner --no-privileges \
+            | gzip -9 > "umami-${STAMP}.sql.gz"
+
+      - name: Upload to R2 and rotate to last 4
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }} # https://<account-id>.r2.cloudflarestorage.com
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          pip install --quiet awscli
+          aws --endpoint-url "$R2_ENDPOINT" s3 cp "$DUMP_NAME" "s3://$R2_BUCKET/umami-backups/$DUMP_NAME"
+
+          # Rotation: keep the 4 most recent, delete the rest. Listing is
+          # lexicographic on the ISO-8601-ish timestamp in the filename, so
+          # sort order == chronological order.
+          aws --endpoint-url "$R2_ENDPOINT" s3 ls "s3://$R2_BUCKET/umami-backups/" \
+            | awk '{print $4}' | sort | head -n -4 > /tmp/to-delete.txt || true
+          while read -r old; do
+            [ -n "$old" ] && aws --endpoint-url "$R2_ENDPOINT" s3 rm "s3://$R2_BUCKET/umami-backups/$old"
+          done < /tmp/to-delete.txt
